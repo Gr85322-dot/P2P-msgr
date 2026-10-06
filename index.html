@@ -114,11 +114,7 @@
 // ============================================================
 // Состояние
 // ============================================================
-const RTC_CONFIG = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' }
-  ]
-};
+const RTC_CONFIG = { iceServers: [] };
 let pc = null, controlDC = null, fileDC = null, isHost = false;
 let currentFileSend = null, incomingFile = null, pendingFileOffer = null;
 
