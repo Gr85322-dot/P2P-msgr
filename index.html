@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>P2P Chat</title>
+<script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #eef1f5; color: #111; }
+  .screen { display: none; flex-direction: column; height: 100vh; height: 100dvh; }
+  .screen.active { display: flex; }
+  h1, h2 { margin: 16px; font-weight: 600; }
+  .box { padding: 16px; flex: 1; overflow-y: auto; }
+  textarea, input[type=text] { width: 100%; font-family: monospace; font-size: 12px; padding: 10px; border: 1px solid #cbd2db; border-radius: 8px; background: #fff; resize: vertical; }
+  textarea { min-height: 60px; word-break: break-all; }
+  button { font-size: 16px; padding: 12px 16px; margin: 6px 0; border: none; border-radius: 10px; background: #2b6cb0; color: #fff; cursor: pointer; font-weight: 500; }
+  button:active { background: #1e4f87; }
+  button.secondary { background: #718096; }
+  button.danger { background: #c53030; }
+  .btn-row { display: flex; gap: 8px; }
+  .btn-row button { flex: 1; }
+  p { margin: 12px 0; color: #4a5568; font-size: 14px; }
+  .card { background: #fff; border-radius: 12px; padding: 16px; margin: 12px 0; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+  .qr-wrap { text-align: center; padding: 12px; background: #fff; border-radius: 12px; margin: 12px 0; }
+  .qr-wrap canvas { max-width: 100%; height: auto; }
+  .link-box { font-family: monospace; font-size: 11px; word-break: break-all; background: #f7fafc; padding: 10px; border-radius: 8px; border: 1px solid #e2e8f0; margin-top: 8px; }
+  .toggle { font-size: 13px; color: #2b6cb0; cursor: pointer; text-decoration: underline; margin-top: 8px; display: inline-block; }
+  .hidden { display: none; }
+
+  #messages { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 6px; }
+  .msg { max-width: 80%; padding: 8px 12px; border-radius: 14px; font-size: 15px; word-wrap: break-word; white-space: pre-wrap; }
+  .msg.me { align-self: flex-end; background: #2b6cb0; color: #fff; border-bottom-right-radius: 4px; }
+  .msg.them { align-self: flex-start; background: #fff; border-bottom-left-radius: 4px; }
+  .msg.sys { align-self: center; background: transparent; color: #718096; font-size: 12px; font-style: italic; }
+  #input-row { display: flex; gap: 6px; padding: 8px; background: #fff; border-top: 1px solid #e2e8f0; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+  #msg-input { flex: 1; font-size: 16px; font-family: inherit; border-radius: 22px; padding: 10px 16px; }
+  #input-row button { margin: 0; padding: 10px 16px; border-radius: 22px; }
+  .file-progress { font-size: 12px; color: #718096; text-align: center; padding: 4px; }
+  .status { text-align: center; padding: 8px; background: #fff; font-size: 13px; color: #718096; border-bottom: 1px solid #e2e8f0; }
+  .file-msg { display: flex; flex-direction: column; gap: 6px; }
+  .file-actions { display: flex; gap: 6px; }
+  .file-actions button { flex: 1; padding: 6px 10px; font-size: 13px; margin: 0; }
+</style>
+</head>
+<body>
+
+<!-- МЕНЮ -->
+<div id="menu" class="screen active">
+  <h1>P2P Chat</h1>
+  <div class="box">
+    <button style="width:100%" onclick="startCreate()">Создать чат</button>
+    <button style="width:100%" class="secondary" onclick="switchScreen('join')">Присоединиться вручную</button>
+    <p>Работает через WebRTC. Данные идут напрямую между устройствами. Сервера нет — только одноразовый обмен кодами при подключении.</p>
+  </div>
+</div>
+
+<!-- СОЗДАТЬ -->
+<div id="create" class="screen">
+  <h2>Создать чат</h2>
+  <div class="box">
+    <p>1. Передай другу этот код — QR-код или ссылку:</p>
+    <div class="qr-wrap"><canvas id="offer-qr"></canvas></div>
+    <div class="btn-row">
+      <button onclick="copyLink('offer', this)">Копировать ссылку</button>
+    </div>
+    <span class="toggle" onclick="toggle('offer-text')">показать текстовый код</span>
+    <div id="offer-text" class="link-box hidden"></div>
+
+    <div class="card" style="margin-top:20px">
+      <p>2. Вставь ответ друга (ссылку целиком или код):</p>
+      <textarea id="answer-in" placeholder="https://.../#answer=... или просто код"></textarea>
+      <button style="width:100%" onclick="acceptAnswer()">Подключить</button>
+    </div>
+  </div>
+</div>
+
+<!-- ПРИСОЕДИНИТЬСЯ -->
+<div id="join" class="screen">
+  <h2>Присоединиться</h2>
+  <div class="box">
+    <div class="card">
+      <p>Вставь код или ссылку от создателя:</p>
+      <textarea id="offer-in" placeholder="https://.../#offer=... или просто код"></textarea>
+      <button style="width:100%" onclick="joinRoom()">Создать ответ</button>
+    </div>
+
+    <div id="answer-out-wrap" class="hidden" style="margin-top:16px">
+      <p>Передай этот ответ обратно создателю чата:</p>
+      <div class="qr-wrap"><canvas id="answer-qr"></canvas></div>
+      <div class="btn-row">
+        <button onclick="copyLink('answer', this)">Копировать ссылку</button>
+      </div>
+      <span class="toggle" onclick="toggle('answer-text')">показать текстовый код</span>
+      <div id="answer-text" class="link-box hidden"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ЧАТ -->
+<div id="chat" class="screen">
+  <div class="status" id="chat-status">Соединение установлено</div>
+  <div id="messages"></div>
+  <div id="input-row">
+    <input type="text" id="msg-input" placeholder="Сообщение..." onkeydown="if(event.key==='Enter')sendMessage()">
+    <button onclick="pickFile()">📎</button>
+    <button onclick="sendMessage()">→</button>
+  </div>
+  <input type="file" id="file-input" style="display:none" onchange="onFilePicked(event)">
+</div>
+
+<script>
+// ============================================================
+// Состояние
+// ============================================================
+const RTC_CONFIG = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' }
+  ]
+};
+let pc = null, controlDC = null, fileDC = null, isHost = false;
+let currentFileSend = null, incomingFile = null, pendingFileOffer = null;
+
+// ============================================================
+// URL / SDP кодек
+// ============================================================
+function baseUrl() {
+  return location.origin + location.pathname;
+}
+function packSdp(sdp) {
+  return LZString.compressToEncodedURIComponent(sdp);
+}
+function unpackSdp(code) {
+  return LZString.decompressFromEncodedURIComponent(code);
+}
+function makeOfferUrl() {
+  return baseUrl() + '#offer=' + packSdp(pc.localDescription.sdp);
+}
+function makeAnswerUrl() {
+  return baseUrl() + '#answer=' + packSdp(pc.localDescription.sdp);
+}
+
+// Принимаем либо URL, либо просто код — возвращаем код.
+function extractCode(raw, kind) {
+  raw = (raw || '').trim();
+  if (!raw) return null;
+  const marker = '#' + kind + '=';
+  const idx = raw.indexOf(marker);
+  if (idx >= 0) return raw.slice(idx + marker.length).split('&')[0];
+  if (!raw.includes('://') && !raw.includes('#')) return raw;
+  return null;
+}
+
+// ============================================================
+// UI
+// ============================================================
+function switchScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+function toggle(id) { document.getElementById(id).classList.toggle('hidden'); }
+function copyText(text, btn) {
+  const done = () => { const o = btn.textContent; btn.textContent = 'Скопировано ✓'; setTimeout(() => btn.textContent = o, 1500); };
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(() => fallback());
+  } else fallback();
+  function fallback() {
+    const t = document.createElement('textarea');
+    t.value = text; document.body.appendChild(t); t.select();
+    try { document.execCommand('copy'); done(); } catch(e) {}
+    document.body.removeChild(t);
+  }
+}
+function copyLink(kind, btn) {
+  const url = kind === 'offer' ? makeOfferUrl() : makeAnswerUrl();
+  copyText(url, btn);
+}
+function addMessage(text, cls) {
+  const m = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = 'msg ' + cls;
+  div.textContent = text;
+  m.appendChild(div);
+  m.scrollTop = m.scrollHeight;
+}
+function addSystem(text) { addMessage(text, 'sys'); }
+
+async function renderQr(canvasId, text) {
+  const canvas = document.getElementById(canvasId);
+  try {
+    await QRCode.toCanvas(canvas, text, { width: 260, margin: 1, errorCorrectionLevel: 'L' });
+  } catch (e) {
+    canvas.replaceWith(Object.assign(document.createElement('div'), {
+      textContent: 'QR не влез: ссылка слишком длинная. Используй копирование.',
+      style: 'color:#c53030;font-size:13px;padding:20px'
+    }));
+  }
+}
+
+// ============================================================
+// WebRTC база
+// ============================================================
+function setupDataChannels() {
+  controlDC.onmessage = (e) => handleControl(JSON.parse(e.data));
+  controlDC.onclose = () => { addSystem('Соединение закрыто'); document.getElementById('chat-status').textContent = 'Отключено'; };
+  fileDC.binaryType = 'arraybuffer';
+  fileDC.onmessage = (e) => handleFileChunk(e.data);
+}
+function attachPeerEvents(conn) {
+  conn.onconnectionstatechange = () => {
+    document.getElementById('chat-status').textContent = 'Состояние: ' + conn.connectionState;
+    if (conn.connectionState === 'connected') { switchScreen('chat'); addSystem('Соединение установлено'); }
+    if (conn.connectionState === 'failed' || conn.connectionState === 'disconnected') addSystem('Соединение потеряно');
+  };
+}
+async function waitIceComplete(conn) {
+  if (conn.iceGatheringState === 'complete') return;
+  return new Promise(resolve => {
+    const check = () => { if (conn.iceGatheringState === 'complete') { conn.removeEventListener('icegatheringstatechange', check); resolve(); } };
+    conn.addEventListener('icegatheringstatechange', check);
+    setTimeout(() => { conn.removeEventListener('icegatheringstatechange', check); resolve(); }, 8000);
+  });
+}
+
+// ============================================================
+// Хост
+// ============================================================
+async function startCreate() {
+  isHost = true;
+  switchScreen('create');
+
+  pc = new RTCPeerConnection(RTC_CONFIG);
+  controlDC = pc.createDataChannel('control', { ordered: true });
+  fileDC = pc.createDataChannel('file', { ordered: true });
+  setupDataChannels();
+  attachPeerEvents(pc);
+
+  await pc.setLocalDescription(await pc.createOffer());
+  await waitIceComplete(pc);
+
+  const url = makeOfferUrl();
+  await renderQr('offer-qr', url);
+  document.getElementById('offer-text').textContent = url;
+}
+
+async function acceptAnswer() {
+  const code = extractCode(document.getElementById('answer-in').value, 'answer');
+  if (!code) { alert('Не вижу код ответа. Вставь ссылку или код целиком.'); return; }
+  let sdp;
+  try { sdp = unpackSdp(code); } catch(e) { alert('Не могу распаковать ответ'); return; }
+  if (!sdp) { alert('Код повреждён или неполный'); return; }
+  try {
+    await pc.setRemoteDescription({ type: 'answer', sdp });
+  } catch (e) { alert('Ошибка применения answer: ' + e.message); }
+}
+
+// ============================================================
+// Гость
+// ============================================================
+async function joinRoom() {
+  const code = extractCode(document.getElementById('offer-in').value, 'offer');
+  if (!code) { alert('Не вижу код оффера. Вставь ссылку или код целиком.'); return; }
+  let sdp;
+  try { sdp = unpackSdp(code); } catch(e) { alert('Не могу распаковать оффер'); return; }
+  if (!sdp) { alert('Код повреждён или неполный'); return; }
+  await setupGuest(sdp);
+}
+
+async function setupGuest(offerSdp) {
+  isHost = false;
+  switchScreen('join');
+  pc = new RTCPeerConnection(RTC_CONFIG);
+  pc.ondatachannel = (e) => {
+    if (e.channel.label === 'control') controlDC = e.channel;
+    else if (e.channel.label === 'file') fileDC = e.channel;
+    if (controlDC && fileDC) setupDataChannels();
+  };
+  attachPeerEvents(pc);
+
+  try { await pc.setRemoteDescription({ type: 'offer', sdp: offerSdp }); }
+  catch (e) { alert('Ошибка применения оффера: ' + e.message); return; }
+
+  await pc.setLocalDescription(await pc.createAnswer());
+  await waitIceComplete(pc);
+
+  const url = makeAnswerUrl();
+  document.getElementById('answer-out-wrap').classList.remove('hidden');
+  await renderQr('answer-qr', url);
+  document.getElementById('answer-text').textContent = url;
+}
+
+// ============================================================
+// Чат
+// ============================================================
+function sendMessage() {
+  const input = document.getElementById('msg-input');
+  const text = input.value.trim();
+  if (!text) return;
+  if (!controlDC || controlDC.readyState !== 'open') { addSystem('Нет соединения'); return; }
+  controlDC.send(JSON.stringify({ type: 'chat', text }));
+  addMessage(text, 'me');
+  input.value = '';
+}
+
+function handleControl(msg) {
+  switch (msg.type) {
+    case 'chat': addMessage(msg.text, 'them'); break;
+    case 'file_offer': showFileOffer(msg); break;
+    case 'file_accept':
+      if (currentFileSend && currentFileSend.tid === msg.id) startFileStream();
+      break;
+    case 'file_reject':
+      if (currentFileSend && currentFileSend.tid === msg.id) { addSystem('Получатель отклонил файл'); currentFileSend = null; }
+      break;
+    case 'file_start': prepareIncoming(msg); break;
+    case 'file_end': finishIncoming(msg); break;
+  }
+}
+
+// ============================================================
+// Файлы
+// ============================================================
+function pickFile() {
+  if (!controlDC || controlDC.readyState !== 'open') { addSystem('Нет соединения'); return; }
+  document.getElementById('file-input').click();
+}
+function onFilePicked(event) {
+  const file = event.target.files[0];
+  event.target.value = '';
+  if (!file) return;
+  const tid = Math.random().toString(36).slice(2, 10);
+  currentFileSend = { file, tid };
+  controlDC.send(JSON.stringify({ type: 'file_offer', id: tid, name: file.name, size: file.size }));
+  addSystem(`Предложил файл '${file.name}' (${humanSize(file.size)}), жду ответа...`);
+}
+async function startFileStream() {
+  if (!currentFileSend) return;
+  const { file, tid } = currentFileSend;
+  controlDC.send(JSON.stringify({ type: 'file_start', id: tid, name: file.name, size: file.size }));
+  const CHUNK = 16 * 1024;
+  let offset = 0;
+  const bar = showFileProgress('Отправляю ' + file.name);
+  while (offset < file.size) {
+    while (fileDC.bufferedAmount > 512 * 1024) await new Promise(r => setTimeout(r, 30));
+    const buf = await file.slice(offset, offset + CHUNK).arrayBuffer();
+    fileDC.send(buf);
+    offset += buf.byteLength;
+    bar.update(offset / file.size);
+  }
+  controlDC.send(JSON.stringify({ type: 'file_end', id: tid }));
+  bar.done();
+  addSystem(`Файл '${file.name}' отправлен`);
+  currentFileSend = null;
+}
+function showFileOffer(msg) {
+  const m = document.getElementById('messages');
+  const wrap = document.createElement('div');
+  wrap.className = 'msg them file-msg';
+  wrap.innerHTML = `<div><b>${escapeHtml(msg.name)}</b><br><small>${humanSize(msg.size)}</small></div>
+    <div class="file-actions"><button class="secondary" data-act="accept">Принять</button><button class="danger" data-act="reject">Отклонить</button></div>`;
+  m.appendChild(wrap); m.scrollTop = m.scrollHeight;
+  wrap.querySelector('[data-act=accept]').onclick = () => {
+    controlDC.send(JSON.stringify({ type: 'file_accept', id: msg.id }));
+    wrap.remove(); pendingFileOffer = { ...msg, accepted: true };
+  };
+  wrap.querySelector('[data-act=reject]').onclick = () => {
+    controlDC.send(JSON.stringify({ type: 'file_reject', id: msg.id }));
+    wrap.remove(); addSystem(`Отклонил '${msg.name}'`);
+  };
+}
+function prepareIncoming(msg) {
+  if (!pendingFileOffer || pendingFileOffer.id !== msg.id) return;
+  incomingFile = { id: msg.id, name: msg.name, size: msg.size, received: 0, chunks: [] };
+  showFileProgress('Принимаю ' + msg.name);
+}
+function handleFileChunk(buf) {
+  if (!incomingFile) return;
+  incomingFile.chunks.push(buf);
+  incomingFile.received += buf.byteLength;
+  updateFileProgress(incomingFile.received / incomingFile.size);
+}
+function finishIncoming(msg) {
+  if (!incomingFile || incomingFile.id !== msg.id) return;
+  const url = URL.createObjectURL(new Blob(incomingFile.chunks));
+  const a = document.createElement('a');
+  a.href = url; a.download = incomingFile.name;
+  a.textContent = `⬇ Скачать ${incomingFile.name} (${humanSize(incomingFile.size)})`;
+  a.style.cssText = 'display:block;margin-top:6px;color:#2b6cb0';
+  const m = document.getElementById('messages');
+  const wrap = document.createElement('div');
+  wrap.className = 'msg them'; wrap.appendChild(a);
+  m.appendChild(wrap); m.scrollTop = m.scrollHeight;
+  hideFileProgress(); addSystem(`Получен файл '${incomingFile.name}'`);
+  incomingFile = null; pendingFileOffer = null;
+}
+
+// ============================================================
+// Прогресс
+// ============================================================
+let progressEl = null;
+function showFileProgress(label) {
+  if (!progressEl) {
+    progressEl = document.createElement('div');
+    progressEl.className = 'file-progress';
+    document.getElementById('messages').appendChild(progressEl);
+  }
+  const update = (r) => { progressEl.textContent = `${label}: ${(r*100).toFixed(1)}%`; };
+  update(0);
+  return { update, done: hideFileProgress };
+}
+function updateFileProgress(r) {
+  if (progressEl) progressEl.textContent = progressEl.textContent.split(':')[0] + ': ' + (r*100).toFixed(1) + '%';
+}
+function hideFileProgress() { if (progressEl) { progressEl.remove(); progressEl = null; } }
+
+// ============================================================
+// Утилиты
+// ============================================================
+function humanSize(n) {
+  const u = ['Б','КБ','МБ','ГБ']; let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (i === 0 ? n : n.toFixed(1)) + ' ' + u[i];
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// ============================================================
+// Автозапуск по хэшу
+// ============================================================
+(async function init() {
+  const hash = location.hash;
+  const offerCode = extractCode(hash, 'offer');
+  const answerCode = extractCode(hash, 'answer');
+
+  if (offerCode) {
+    document.getElementById('offer-in').value = hash;
+    await setupGuest(unpackSdp(offerCode));
+  } else if (answerCode) {
+    document.getElementById('answer-in').value = hash;
+    switchScreen('create');
+    addSystem('Похоже, это ответ. Вставь его в исходную вкладку с оффером и нажми «Подключить».');
+  }
+})();
+</script>
+</body>
+</html>
