@@ -25,6 +25,7 @@
   .card { background: #fff; border-radius: 12px; padding: 16px; margin: 12px 0; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
   .qr-wrap { text-align: center; padding: 12px; background: #fff; border-radius: 12px; margin: 12px 0; }
   .qr-wrap canvas { max-width: 100%; height: auto; }
+  .qr-hint { font-size: 12px; color: #718096; margin-top: 8px; word-break: break-all; font-family: monospace; }
   .link-box { font-family: monospace; font-size: 11px; word-break: break-all; background: #f7fafc; padding: 10px; border-radius: 8px; border: 1px solid #e2e8f0; margin-top: 8px; }
   .toggle { font-size: 13px; color: #2b6cb0; cursor: pointer; text-decoration: underline; margin-top: 8px; display: inline-block; }
   .hidden { display: none; }
@@ -60,17 +61,23 @@
 <div id="create" class="screen">
   <h2>Создать чат</h2>
   <div class="box">
-    <p>1. Передай другу этот код — QR-код или ссылку:</p>
-    <div class="qr-wrap"><canvas id="offer-qr"></canvas></div>
+    <p>1. Передай другу ссылку любым способом — Bluetooth, AirDrop, мессенджер:</p>
     <div class="btn-row">
-      <button onclick="copyLink('offer', this)">Копировать ссылку</button>
+      <button onclick="shareLink('offer')">Поделиться</button>
+      <button class="secondary" onclick="copyLink('offer', this)">Копировать</button>
     </div>
-    <span class="toggle" onclick="toggle('offer-text')">показать текстовый код</span>
+
+    <div class="qr-wrap">
+      <canvas id="offer-qr"></canvas>
+      <div class="qr-hint"></div>
+    </div>
+
+    <span class="toggle" onclick="toggle('offer-text')">показать полный код</span>
     <div id="offer-text" class="link-box hidden"></div>
 
     <div class="card" style="margin-top:20px">
       <p>2. Вставь ответ друга (ссылку целиком или код):</p>
-      <textarea id="answer-in" placeholder="https://.../#answer=... или просто код"></textarea>
+      <textarea id="answer-in" placeholder="https://.../?answer=... или просто код"></textarea>
       <button style="width:100%" onclick="acceptAnswer()">Подключить</button>
     </div>
   </div>
@@ -82,17 +89,23 @@
   <div class="box">
     <div class="card">
       <p>Вставь код или ссылку от создателя:</p>
-      <textarea id="offer-in" placeholder="https://.../#offer=... или просто код"></textarea>
+      <textarea id="offer-in" placeholder="https://.../?offer=... или просто код"></textarea>
       <button style="width:100%" onclick="joinRoom()">Создать ответ</button>
     </div>
 
     <div id="answer-out-wrap" class="hidden" style="margin-top:16px">
       <p>Передай этот ответ обратно создателю чата:</p>
-      <div class="qr-wrap"><canvas id="answer-qr"></canvas></div>
       <div class="btn-row">
-        <button onclick="copyLink('answer', this)">Копировать ссылку</button>
+        <button onclick="shareLink('answer')">Поделиться</button>
+        <button class="secondary" onclick="copyLink('answer', this)">Копировать</button>
       </div>
-      <span class="toggle" onclick="toggle('answer-text')">показать текстовый код</span>
+
+      <div class="qr-wrap">
+        <canvas id="answer-qr"></canvas>
+        <div class="qr-hint"></div>
+      </div>
+
+      <span class="toggle" onclick="toggle('answer-text')">показать полный код</span>
       <div id="answer-text" class="link-box hidden"></div>
     </div>
   </div>
@@ -131,20 +144,22 @@ function unpackSdp(code) {
   return LZString.decompressFromEncodedURIComponent(code);
 }
 function makeOfferUrl() {
-  return baseUrl() + '#offer=' + packSdp(pc.localDescription.sdp);
+  return baseUrl() + '?offer=' + packSdp(pc.localDescription.sdp);
 }
 function makeAnswerUrl() {
-  return baseUrl() + '#answer=' + packSdp(pc.localDescription.sdp);
+  return baseUrl() + '?answer=' + packSdp(pc.localDescription.sdp);
 }
 
 // Принимаем либо URL, либо просто код — возвращаем код.
 function extractCode(raw, kind) {
   raw = (raw || '').trim();
   if (!raw) return null;
-  const marker = '#' + kind + '=';
-  const idx = raw.indexOf(marker);
-  if (idx >= 0) return raw.slice(idx + marker.length).split('&')[0];
-  if (!raw.includes('://') && !raw.includes('#')) return raw;
+  const patterns = ['?' + kind + '=', '#' + kind + '=', '&' + kind + '='];
+  for (const marker of patterns) {
+    const idx = raw.indexOf(marker);
+    if (idx >= 0) return raw.slice(idx + marker.length).split('&')[0].split('#')[0];
+  }
+  if (!raw.includes('://') && !raw.includes('?') && !raw.includes('#')) return raw;
   return null;
 }
 
@@ -157,7 +172,9 @@ function switchScreen(id) {
 }
 function toggle(id) { document.getElementById(id).classList.toggle('hidden'); }
 function copyText(text, btn) {
-  const done = () => { const o = btn.textContent; btn.textContent = 'Скопировано ✓'; setTimeout(() => btn.textContent = o, 1500); };
+  const done = () => {
+    if (btn) { const o = btn.textContent; btn.textContent = 'Скопировано ✓'; setTimeout(() => btn.textContent = o, 1500); }
+  };
   if (navigator.clipboard?.writeText) {
     navigator.clipboard.writeText(text).then(done).catch(() => fallback());
   } else fallback();
@@ -172,6 +189,25 @@ function copyLink(kind, btn) {
   const url = kind === 'offer' ? makeOfferUrl() : makeAnswerUrl();
   copyText(url, btn);
 }
+
+// === НАТИВНОЕ МЕНЮ "ПОДЕЛИТЬСЯ" (Bluetooth, AirDrop, мессенджеры и т.д.) ===
+async function shareLink(kind) {
+  const url = kind === 'offer' ? makeOfferUrl() : makeAnswerUrl();
+  const title = kind === 'offer' ? 'Приглашение в чат' : 'Ответ на приглашение';
+  if (navigator.share) {
+    try {
+      await navigator.share({ title, text: title, url });
+      return;
+    } catch (e) {
+      if (e && e.name === 'AbortError') return;
+      // иначе — фоллбэк
+    }
+  }
+  // Фоллбэк: обычное копирование
+  copyText(url, null);
+  alert('Ссылка скопирована в буфер обмена');
+}
+
 function addMessage(text, cls) {
   const m = document.getElementById('messages');
   const div = document.createElement('div');
@@ -182,15 +218,35 @@ function addMessage(text, cls) {
 }
 function addSystem(text) { addMessage(text, 'sys'); }
 
-async function renderQr(canvasId, text) {
+// Сокращение через is.gd
+async function shortenUrl(longUrl) {
+  try {
+    const r = await fetch('https://is.gd/create.php?format=simple&url=' +
+      encodeURIComponent(longUrl));
+    if (!r.ok) return null;
+    const t = (await r.text()).trim();
+    if (t.startsWith('http')) return t;
+    return null;
+  } catch (e) { return null; }
+}
+
+async function renderQr(canvasId, longUrl) {
+  const short = await shortenUrl(longUrl);
+  const qrData = short || longUrl;
+
   const canvas = document.getElementById(canvasId);
   try {
-    await QRCode.toCanvas(canvas, text, { width: 260, margin: 1, errorCorrectionLevel: 'L' });
+    await QRCode.toCanvas(canvas, qrData, {
+      width: 340,
+      margin: 1,
+      errorCorrectionLevel: 'L',
+    });
+    const hint = canvas.parentElement.querySelector('.qr-hint');
+    if (hint) hint.textContent = short ? 'QR: ' + short : '';
   } catch (e) {
-    canvas.replaceWith(Object.assign(document.createElement('div'), {
-      textContent: 'QR не влез: ссылка слишком длинная. Используй копирование.',
-      style: 'color:#c53030;font-size:13px;padding:20px'
-    }));
+    canvas.parentElement.innerHTML =
+      '<p style="color:#7b341e;font-size:13px;padding:16px;background:#fffaf0;border-radius:8px">' +
+      'QR не влез.<br>Используй кнопку «Поделиться» — там будут Bluetooth, AirDrop, мессенджеры.</p>';
   }
 }
 
@@ -236,8 +292,8 @@ async function startCreate() {
   await waitIceComplete(pc);
 
   const url = makeOfferUrl();
-  await renderQr('offer-qr', url);
   document.getElementById('offer-text').textContent = url;
+  await renderQr('offer-qr', url);
 }
 
 async function acceptAnswer() {
@@ -282,8 +338,8 @@ async function setupGuest(offerSdp) {
 
   const url = makeAnswerUrl();
   document.getElementById('answer-out-wrap').classList.remove('hidden');
-  await renderQr('answer-qr', url);
   document.getElementById('answer-text').textContent = url;
+  await renderQr('answer-qr', url);
 }
 
 // ============================================================
@@ -423,18 +479,18 @@ function escapeHtml(s) {
 }
 
 // ============================================================
-// Автозапуск по хэшу
+// Автозапуск по URL
 // ============================================================
 (async function init() {
-  const hash = location.hash;
-  const offerCode = extractCode(hash, 'offer');
-  const answerCode = extractCode(hash, 'answer');
+  const raw = location.search + location.hash;
+  const offerCode = extractCode(raw, 'offer');
+  const answerCode = extractCode(raw, 'answer');
 
   if (offerCode) {
-    document.getElementById('offer-in').value = hash;
+    document.getElementById('offer-in').value = location.href;
     await setupGuest(unpackSdp(offerCode));
   } else if (answerCode) {
-    document.getElementById('answer-in').value = hash;
+    document.getElementById('answer-in').value = location.href;
     switchScreen('create');
     addSystem('Похоже, это ответ. Вставь его в исходную вкладку с оффером и нажми «Подключить».');
   }
